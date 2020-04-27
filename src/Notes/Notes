@@ -1,0 +1,11 @@
+Week Apr 17:
+
+- Register allocation: Can the compiler decide teh number of registers?
+  Since the architecture is fictional, can we parametrise it and let the
+  compiler/static analysis decide on those parameters.
+  Based on static analysis the parameters reveal no extra information that is not readily available. Right?
+
+- TinyRAM condition flag: good optimization but wasted if compiling frm LLVM that already stores teh "flag" in registers. Do we want a compiler pass to find these flags and lift them unto the real flag?
+
+
+  
