@@ -1,8 +1,8 @@
-module Test
+module TestInterpreter
     () where
 
 import MicroRAM
-import Execution
+import MRAMInterpreter
 import Data.Sequence as Seq
 
 k = 5

@@ -41,7 +41,29 @@ data Instruction regT wrdT =
   | Iread regT (Either regT wrdT)      -- if the [A]u-th tape has remaining words then consume the next word,
                                        -- store it in ri, and set flag = 0; otherwise store 0W in ri and set flag = 1
   | Ianswer (Either regT wrdT)         -- stall or halt (and the return value is [A]u)
-
+  deriving (Eq, Read, Show)
 
 -- ## The Program
 type Program r w = [Instruction r w]
+
+
+
+-- ## Registers (see assumptions above)
+{-   regNum >= 8 
+     + 0. Accumulator register (AX). Used in arithmetic operations
+     + 1. Counter register (CX). Used in shift/rotate instructions and loops.
+     + 2. Data register (DX). Used in arithmetic operations and I/O operations.
+     + 3. Base register (BX). Used as a pointer to data (located in segment register DS, when in segmented mode).
+     + 4. Stack Pointer register (SP). Pointer to the top of the stack.
+     + 5. Stack Base Pointer register (BP). Used to point to the base of the stack.
+     + 6. Source Index register (SI). Used as a pointer to a source in stream operations.
+     + 7. Destination Index register (DI). Used as a pointer to a destination in stream operations.
+-}
+ax = 0::Int
+cx = 1::Int
+dx = 2::Int
+bx = 3::Int
+sp = 4::Int
+bp = 5::Int
+si = 6::Int
+di = 7::Int

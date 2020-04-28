@@ -1,4 +1,4 @@
-module Execution
+module MRAMInterpreter
   ( Wrd,
     Reg,
     Regs,

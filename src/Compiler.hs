@@ -2,7 +2,12 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Compiler
-    ( codegenGlob
+    ( codegenGlob,
+      codegenBlock,
+      codegenBlocks,
+      Genv(..),
+      CgMonad,
+      CompiledBlock
     ) where
 
 import qualified LLVM.AST as LLVM
@@ -145,8 +150,12 @@ constOne = LLVM.ConstantOperand (LLVM.Constant.Int (toEnum 1) 1)
 (<:>):: Applicative f => f a -> f [a] -> f [a]
 a <:> b = (:) <$> a <*> b
 
+(<++>) :: Applicative f => f [a] -> f [a]  -> f [a] 
+a <++> b = (++) <$> a <*> b
+
 -- ## Arithmetic
 -- Add
+
 codegenInstruction genv ret (LLVM.Add _ _ o1 o2 _) = codegenBinop genv ret o1 o2 MRAM.Iadd
 -- Sub
 codegenInstruction genv ret (LLVM.Sub _ _ o1 o2 _) = codegenBinop genv ret o1 o2 MRAM.Isub
@@ -257,6 +266,7 @@ codegenInstruction genv (Just ret) (LLVM.ICmp pred op1 op2 _) =
             compare _ _ _ = implError "Unsigned comparisons"
                         
 
+codegenInstruction genv _ (LLVM.Call _ _ _ _ _ _ _ ) =  implError $ "Call not implemented yet, but its next on my list"
 codegenInstruction genv _ instr =  implError $ "Instruction: " ++ (show instr)
 
 
@@ -269,6 +279,17 @@ codegenNInstruction genv (LLVM.Do instr) = codegenInstruction genv Nothing instr
 codegenNInstruction genv (name LLVM.:= instr) = let ret = getReg name in
                                                   (\ret -> codegenInstruction genv (Just ret) instr) =<< ret
 
+
+-- ## Many instructions
+codegenInstrs
+  :: Genv
+     -> [LLVM.Named LLVM.Instruction]
+     -> CgMonad $ [MRAM.Instruction Reg Wrd]
+codegenInstrs genv [] = Right $ []
+codegenInstrs genv instrs = (foldr1 (++)) <$>  (mapM (codegenNInstruction genv) instrs)
+
+
+
 -- ## Basic Blocks
 {-
   LLVM.BasicBlock
@@ -276,15 +297,102 @@ codegenNInstruction genv (name LLVM.:= instr) = let ret = getReg name in
      -> [LLVM.Named LLVM.Instruction]
      -> LLVM.Named LLVM.Terminator
      -> LLVM.BasicBlock
+Compiling basic blocks is done in three passes (can be optimized into two).
+1. Compiles all the non terminator instructions.
+2. Creates an mapping from block labels to instruction number.
+3. Compiles the terminators using the mapping from labels to line no. to set the right target for control flow.
+
 -}
 
-data CompiledBlocks = CompiledBlocks { cb_name::LLVM.Name ,
-                                       cb_lineNo::Int,
-                                       cb_code::Prog,
-                                       cb_terminator::LLVM.Named LLVM.Terminator}
-                      
-codegenBlocks :: Genv -> LLVM.BasicBlock -> CgMonad $ Prog
-codegenBlocks genv bbs = Right $ []
+
+
+data CompiledBlock = CompiledBlock { cb_name::LLVM.Name
+                                   , cb_terminator::LLVM.Named LLVM.Terminator
+                                   , cb_code::Prog
+                                   } deriving (Eq, Read, Show)
+type LabelMap = LLVM.Name -> Maybe Int
+initLblMap :: LabelMap
+initLblMap = \_ -> Nothing
+
+(<--) :: LabelMap -> LLVM.Name -> Int -> LabelMap
+(<--) lmap name n name' 
+  | name == name' = Just n
+  | otherwise = lmap name'
+
+label2reg:: LabelMap -> LLVM.Name -> CgMonad $ Either Reg Wrd
+label2reg lmap name =
+  case lmap name of
+    Just ln -> Right (Right ln)
+    Nothing -> otherError $ "Label not found: " ++ show (name)
+
+-- Statically we can know the numer of instructions taken to execute a terminator
+-- Be carefull to update this when more terminators are implemented
+-- Again this can be done much better if optimized into one pass
+terminatorSize :: Num p => LLVM.Terminator -> p
+terminatorSize (LLVM.Br name _) = 1
+terminatorSize (LLVM.CondBr _ _ _ _) = 3
+terminatorSize _ = 0
+
+nTerminatorSize :: Num p => LLVM.Named LLVM.Terminator -> p
+nTerminatorSize (_ LLVM.:= term) = terminatorSize term
+nTerminatorSize (LLVM.Do term) = terminatorSize term
+
+getNameMap_rec :: Int -> LabelMap -> [CompiledBlock] -> LabelMap
+getNameMap_rec _ lmap [] = lmap
+getNameMap_rec n lmap ((CompiledBlock name term code ):ls) =
+  getNameMap_rec (n + (length code) + (nTerminatorSize term) ) (lmap <-- name $ n) ls
+
+getNameMap :: [CompiledBlock] -> LabelMap
+getNameMap = getNameMap_rec 0 initLblMap
+
+-- We ignore the name of terminators
+codegenTerminator :: LabelMap -> LLVM.Named LLVM.Terminator -> CgMonad $ Prog
+codegenTerminator lmap (_ LLVM.:= term) = codegenTerminator' lmap term
+codegenTerminator lmap (LLVM.Do term) = codegenTerminator' lmap term
+
+codegenTerminator' :: LabelMap -> LLVM.Terminator -> CgMonad $ Prog
+-- Branching
+codegenTerminator' lmap (LLVM.Br name _) = (MRAM.Ijmp <$> (label2reg lmap name)) <:> (Right [])
+codegenTerminator' lmap (LLVM.CondBr (LLVM.LocalReference _ name ) name1 name2 _) =
+  let r1 = getReg name1 in
+    let loc1 = label2reg lmap name1 in
+      let loc2 = label2reg lmap name2 in
+    ((flip MRAM.Icmpe (Left 1)) <$> r1) <:>
+    ((MRAM.Icjmp <$> loc1) <:> 
+    ((MRAM.Ijmp <$> loc2) <:>
+    (Right [])))
+codegenTerminator' lmap (LLVM.CondBr _ name1 name2 _) =
+  assumptError "conditional branching must depend on a register. If you passed a constant prhaps you forgot to run constant propagation. Metadata is not supported."
+codegenTerminator' lmap (LLVM.Ret _ _ ) = implError $ "Return not supported yet ... but its next on my list"
+codegenTerminator' _ term = implError $ "Terminator not yet supported" ++ (show term)
+      
+  
+codegenBlock :: Genv -> LLVM.BasicBlock -> CgMonad $ CompiledBlock
+codegenBlock genv (LLVM.BasicBlock name instrs term) =
+  (CompiledBlock name term) <$> (codegenInstrs genv instrs)
+
+codegenCompiledBlock
+  :: Genv
+     -> LabelMap
+     -> CompiledBlock
+     -> CgMonad $ Prog
+codegenCompiledBlock genv lmap (CompiledBlock name term prog) =
+  (prog ++) <$> (codegenTerminator lmap term)
+
+
+codegenBlocks :: Genv -> [LLVM.BasicBlock] -> CgMonad $ Prog
+codegenBlocks genv blocks =
+  let compiledBlocks = mapM (codegenBlock genv) blocks in
+    let lmap = getNameMap <$> compiledBlocks in
+      (foldr1 (++)) <$> (mapM <$> (((codegenCompiledBlock genv) <$> lmap)) <*> compiledBlocks >>= id)
+
+-- ## Globals
+
+codegenGlob :: Genv -> LLVM.Global -> CgMonad $ Prog
+codegenGlob genv (LLVM.GlobalVariable name _ _ _ _ _ _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Varianbles"
+codegenGlob genv (LLVM.GlobalAlias name _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Alias"
+codegenGlob genv (LLVM.Function _ _ _ _ _ retT name params _ _ _ _ _ _ bb _ _) =
+  Right $ []
 
 
 
@@ -303,10 +411,4 @@ codegenDefs (d:ds) = Right []
 codegenDef :: Genv -> LLVM.Definition -> CgMonad $ Prog
 codegenDef genv (LLVM.GlobalDefinition glob) = Right []
 codegenDef genv otherDef = Left $ NotImpl (show otherDef)
-
-
-codegenGlob :: Genv -> LLVM.Global -> CgMonad $ Prog
-codegenGlob genv (LLVM.GlobalVariable name _ _ _ _ _ _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Varianbles"
-codegenGlob genv (LLVM.GlobalAlias name _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Alias"
-codegenGlob genv (LLVM.Function _ _ _ _ _ retT name params _ _ _ _ _ _ bb _ _) = Right $ []
 
