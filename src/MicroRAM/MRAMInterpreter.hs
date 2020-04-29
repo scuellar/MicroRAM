@@ -1,4 +1,4 @@
-module MRAMInterpreter
+module MicroRAM.MRAMInterpreter
   ( Wrd,
     Reg,
     Regs,
@@ -10,7 +10,7 @@ module MRAMInterpreter
     step,
     run) where
 
-import MicroRAM
+import MicroRAM.MicroRAM
 import Data.Bits
 import Data.Sequence as Seq
 

@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-module TestCompiler
+module Compiler.CompilerSpec
     () where
 
-import Compiler
+import Compiler.Compiler
 import qualified LLVM.AST as LLVM
 import LLVM.AST (Named(..))
 import qualified LLVM.AST.Constant as LLVM.Constant
@@ -106,7 +106,7 @@ label
 label name insts term =
   LLVM.BasicBlock name insts term
 
--- 
+-- # Examples
 ex1 :: [LLVM.BasicBlock]
 ex1 = [
   label "main" [

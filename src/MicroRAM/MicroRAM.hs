@@ -1,4 +1,4 @@
-module MicroRAM
+module MicroRAM.MicroRAM
 ( Instruction(..),
   Program) where
 

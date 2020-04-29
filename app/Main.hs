@@ -1,7 +1,7 @@
 module Main where
 
 import Lib
-import Compiler
+import Compiler.Compiler
 
 main :: IO ()
 main = someFunc

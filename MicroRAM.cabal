@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 17497bcc6d2e2e027759ffcecae54b416db07412af70cc65e9c285053f5aca55
+-- hash: 5f47c8a9cbc3cbb4f34f5e13a6b2fa0f77ee8724161055ed841d8583f1faad9c
 
 name:           MicroRAM
 version:        0.1.0.0
@@ -27,12 +27,10 @@ source-repository head
 
 library
   exposed-modules:
-      Compiler
+      Compiler.Compiler
       Lib
-      LLVMConstructors
-      MicroRAM
-      MRAMInterpreter
-      RegAllocatorParams
+      MicroRAM.MicroRAM
+      MicroRAM.MRAMInterpreter
   other-modules:
       Paths_MicroRAM
   hs-source-dirs:
@@ -43,6 +41,8 @@ library
     , containers
     , llvm-hs-pure
     , mtl
+    , tasty
+    , tasty-hunit
   default-language: Haskell2010
 
 executable MicroRAM-exe
@@ -59,14 +59,16 @@ executable MicroRAM-exe
     , containers
     , llvm-hs-pure
     , mtl
+    , tasty
+    , tasty-hunit
   default-language: Haskell2010
 
 test-suite MicroRAM-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      TestCompiler
-      TestInterpreter
+      Compiler.CompilerSpec
+      MicroRAM.InterpreterSpec
       Paths_MicroRAM
   hs-source-dirs:
       test
@@ -78,4 +80,6 @@ test-suite MicroRAM-test
     , containers
     , llvm-hs-pure
     , mtl
+    , tasty
+    , tasty-hunit
   default-language: Haskell2010

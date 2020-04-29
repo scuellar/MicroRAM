@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Compiler
+module Compiler.Compiler
     ( codegenGlob,
       codegenBlock,
       codegenBlocks,
@@ -20,7 +20,7 @@ import qualified Data.ByteString.Short as Short
 import qualified Data.Sequence as Seq (lookup, fromList)
 import qualified Data.Word as Word
 
-import qualified MicroRAM as MRAM
+import qualified MicroRAM.MicroRAM as MRAM
 import qualified LLVM.AST.IntegerPredicate as IntPred
 
 

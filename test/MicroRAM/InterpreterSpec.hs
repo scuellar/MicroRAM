@@ -1,13 +1,25 @@
-module TestInterpreter
-    () where
+module MicroRAM.InterpreterSpec where
 
-import MicroRAM
-import MRAMInterpreter
+
+
+import Test.Tasty
+import Test.Tasty.HUnit
+
+
+import MicroRAM.MicroRAM
+import MicroRAM.MRAMInterpreter
 import Data.Sequence as Seq
 
+
+main :: IO ()
+main = do
+  defaultMain (testGroup "Our Library Tests" testSuite) -- testSuit defined at eof
 k = 5
 
--- The tester
+
+
+
+-- The tester setup
 
 get_regs :: State -> Regs
 get_regs = regs
@@ -24,6 +36,8 @@ pc_trace t= map pc t
 flag_trace::Trace -> [Bool]
 flag_trace t= map flag t
 
+
+
 -- # Test 1
 {- (1+2)*(3+4) = 21
 -}
@@ -39,7 +53,11 @@ prog = [Iadd 0 0 (Right 1),
        Imull 0 0 (Left 1)]
 
 run1 = run' prog
-test1 = Seq.lookup 0 (see run1 5) == Just 21
+
+test1 :: TestTree
+test1 = testCase "Calculating (1+2)*(3+4)"
+  (assertEqual "Should compute 21" (Seq.lookup 0 (see run1 5)) (Just 21))
+
 
 
 -- # Test 2
@@ -117,3 +135,6 @@ prog5 = [Iread 1 (Right 0), --
 
 test5 ls = Seq.lookup 0 (see (run5 ls) (4* (Prelude.length ls))) == (Just $ sum ls)
 
+
+
+testSuite = []

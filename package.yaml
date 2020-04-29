@@ -25,6 +25,8 @@ dependencies:
 - llvm-hs-pure
 - mtl
 - bytestring
+- tasty
+- tasty-hunit
 
 library:
   source-dirs: src
