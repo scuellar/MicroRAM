@@ -8,11 +8,16 @@ module MicroRAM.MRAMInterpreter
     Prog,
     Trace,
     step,
-    run) where
+    run,
+    execute,
+    exec_input,
+    pc_trace,
+    out_trace,
+    flag_trace) where
 
 import MicroRAM.MicroRAM
 import Data.Bits
-import Data.Sequence as Seq
+import qualified Data.Sequence as Seq
 
 {-
 Notes:
@@ -33,7 +38,7 @@ type Pc = Wrd
 init_pc = 0
 
 -- ## Registers
-type Regs = Seq Wrd
+type Regs = Seq.Seq Wrd
 
 init_regs :: Int -> Regs
 init_regs k = Seq.replicate k 0 
@@ -78,7 +83,7 @@ init_state k t_input t_advice  = State {
 set_reg:: State -> Reg -> Wrd -> State
 set_reg st r x = State {
   pc = pc st
-  , regs = update r x (regs st)
+  , regs = Seq.update r x (regs st)
   , mem = mem st
   , tapes = tapes st
   , flag = flag st
@@ -134,7 +139,7 @@ pop_tape _ = Nothing
 set_tape::State -> Maybe Bool -> Reg -> Maybe (Wrd, Tape) -> State
 set_tape st (Just tn) r (Just (x, tp)) =  State {
   pc = pc st
-  , regs = update r x (regs st)
+  , regs = Seq.update r x (regs st)
   , mem = mem st
   , tapes = set_pair tn tp (tapes st)
   , flag = flag st
@@ -229,3 +234,39 @@ type Trace = [State]
 run ::  Int -> Tape -> Tape -> Prog -> Trace
 run k x w prog = (init_state k x w):(map (step prog) $ run k x w prog)
 
+
+
+
+-- ## Some facilities to run
+get_regs :: State -> Regs
+get_regs = regs
+
+see_regs:: Trace -> Int -> Regs
+see_regs t n = regs (t !! n)
+
+reg_trace::Trace -> [Regs]
+reg_trace t = map regs t
+
+pc_trace'::Trace -> [Int]
+pc_trace' t= map pc t
+
+flag_trace'::Trace -> [Bool]
+flag_trace' t= map flag t
+
+-- The standard execution
+{- Runs n steps then shows the content od first register
+-}
+k = 16
+
+run' n prog = Prelude.take n (run k [] [] prog)
+pc_trace n prog = map pc (run' n prog)
+out_trace n prog = map (\s-> Seq.index (regs s) 0) (run' n prog)
+flag_trace n prog = map flag (run' n prog)
+
+execute :: Prog -> Int -> Wrd
+execute prog n = Seq.index (regs $ (run k [] [] prog) !! n) 0
+
+execute_pc prog n = Seq.index ((see_regs $ run k [] [] prog) n) 0
+
+exec_input :: Prog -> Tape -> Tape -> Int -> Wrd
+exec_input prog x w n = Seq.index ((see_regs $ run k x w prog) n) 0

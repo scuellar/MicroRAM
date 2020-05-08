@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 5f47c8a9cbc3cbb4f34f5e13a6b2fa0f77ee8724161055ed841d8583f1faad9c
+-- hash: 04e7efb74ad28a5da3261046738fa3adc5b9d6ffb26c71001326234ff33ef19e
 
 name:           MicroRAM
 version:        0.1.0.0
@@ -27,6 +27,7 @@ source-repository head
 
 library
   exposed-modules:
+      Circuit.MAC
       Compiler.Compiler
       Lib
       MicroRAM.MicroRAM
@@ -36,8 +37,11 @@ library
   hs-source-dirs:
       src
   build-depends:
-      base >=4.7 && <5
+      QuickCheck
+    , base >=4.7 && <5
     , bytestring
+    , clash-ghc
+    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl
@@ -54,8 +58,11 @@ executable MicroRAM-exe
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       MicroRAM
+    , QuickCheck
     , base >=4.7 && <5
     , bytestring
+    , clash-ghc
+    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl
@@ -75,8 +82,11 @@ test-suite MicroRAM-test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       MicroRAM
+    , QuickCheck
     , base >=4.7 && <5
     , bytestring
+    , clash-ghc
+    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl

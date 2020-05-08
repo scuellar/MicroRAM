@@ -5,7 +5,9 @@ Week Apr 17:
   compiler/static analysis decide on those parameters.
   Based on static analysis the parameters reveal no extra information that is not readily available. Right?
 
-- TinyRAM condition flag: good optimization but wasted if compiling frm LLVM that already stores teh "flag" in registers. Do we want a compiler pass to find these flags and lift them unto the real flag?
+- TinyRAM condition flag: good optimization but wasted if compiling from LLVM that already stores the "flag" in registers. Do we want a compiler pass to find these flags and lift them unto the real flag?
 
 
-  
+- If the target ISA is parametrized (e.g word size and register number) can the compiler/static analyses choose the parameters?
+
+- Have specialized registers, for example PC can be log|P| size. A type-directed-register allocator can set a number of boolean registers. 

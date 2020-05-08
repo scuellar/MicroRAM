@@ -27,6 +27,9 @@ dependencies:
 - bytestring
 - tasty
 - tasty-hunit
+- QuickCheck
+- clash-ghc
+- clash-prelude
 
 library:
   source-dirs: src

@@ -6,6 +6,8 @@ module Compiler.CompilerSpec
 
 import Compiler.Compiler
 import qualified LLVM.AST as LLVM
+import qualified MicroRAM.MicroRAM as MRAM
+import MicroRAM.MRAMInterpreter
 import LLVM.AST (Named(..))
 import qualified LLVM.AST.Constant as LLVM.Constant
 import qualified LLVM.AST.IntegerPredicate as IntPred
@@ -16,7 +18,18 @@ import qualified Data.String as String
 --import Data.Bits.Extras
 --import Data.Sequence as Seq
 
+import qualified Test.QuickCheck as QC
 
+
+
+
+
+-- Setup an interpreter to run the output
+{- We assume the output to be in the first register
+   We fix 16 registers
+   There is no termination instruction... so we run forever
+   The interpreter must take a input for "fuel"
+-}
 
 -- Build arbitrary words 
 w32 :: Integral a => a -> Word.Word32
@@ -106,14 +119,17 @@ label
 label name insts term =
   LLVM.BasicBlock name insts term
 
--- # Examples
+-- # Example 1
+{- Adds 1 to "a" forever
+-}
 ex1 :: [LLVM.BasicBlock]
 ex1 = [
   label "main" [
       "a":= ("a" .+ 1)]
     (Do $ LLVM.Br "loop" []),
     label "loop" [
-      "a":= ("a" .+ 1)]
+      "a":= ("a" .+ 1),
+      "":= ("a" .+ 0)]
     (Do $ LLVM.Br "loop" [])]
      
 aa = ("a" .+ 1)
@@ -122,3 +138,23 @@ genv :: Genv
 genv = Genv (\_ -> 0) (\_ -> 0)
 
 ex1Comp = codegenBlocks genv ex1
+test1 n = (flip execute (n) <$> ex1Comp)
+
+
+-- # Example 2
+{- fibonacci
+-}
+ex2 :: [LLVM.BasicBlock]
+ex2 = [
+  label "main" [ 
+      "a":= ("a" .+ 1)]
+    (Do $ LLVM.Br "loop" []),
+    label "loop" [
+      "b":= ("a" .+ 0),
+      "a":= ("a" .+ ""),
+      "":= ("b" .+ 0)]
+    (Do $ LLVM.Br "loop" [])]
+     
+ex2Comp = codegenBlocks genv ex2
+test2 n = (flip execute (4+n*4) <$> ex2Comp) -- returns fib n
+
