@@ -25,11 +25,6 @@ dependencies:
 - llvm-hs-pure
 - mtl
 - bytestring
-- tasty
-- tasty-hunit
-- QuickCheck
-- clash-ghc
-- clash-prelude
 
 library:
   source-dirs: src
@@ -46,12 +41,17 @@ executables:
     - MicroRAM
 
 tests:
-  MicroRAM-test:
-    main:                Spec.hs
-    source-dirs:         test
+  MicroRAM-interpreter-test:
+    main:                InterpreterSpec.hs
+    source-dirs:         test/MicroRAM
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -main-is MicroRAM.InterpreterSpec
     dependencies:
     - MicroRAM
+    - tasty
+    - tasty-hunit
+    - tasty-smallcheck
+  

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 04e7efb74ad28a5da3261046738fa3adc5b9d6ffb26c71001326234ff33ef19e
+-- hash: ac823a3be820592f61e26483e4edd25456d90d4720448ddc33a4fc5ab2a53160
 
 name:           MicroRAM
 version:        0.1.0.0
@@ -37,16 +37,11 @@ library
   hs-source-dirs:
       src
   build-depends:
-      QuickCheck
-    , base >=4.7 && <5
+      base >=4.7 && <5
     , bytestring
-    , clash-ghc
-    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl
-    , tasty
-    , tasty-hunit
   default-language: Haskell2010
 
 executable MicroRAM-exe
@@ -58,38 +53,29 @@ executable MicroRAM-exe
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       MicroRAM
-    , QuickCheck
     , base >=4.7 && <5
     , bytestring
-    , clash-ghc
-    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl
-    , tasty
-    , tasty-hunit
   default-language: Haskell2010
 
-test-suite MicroRAM-test
+test-suite MicroRAM-interpreter-test
   type: exitcode-stdio-1.0
-  main-is: Spec.hs
+  main-is: InterpreterSpec.hs
   other-modules:
-      Compiler.CompilerSpec
-      MicroRAM.InterpreterSpec
       Paths_MicroRAM
   hs-source-dirs:
-      test
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+      test/MicroRAM
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is MicroRAM.InterpreterSpec
   build-depends:
       MicroRAM
-    , QuickCheck
     , base >=4.7 && <5
     , bytestring
-    , clash-ghc
-    , clash-prelude
     , containers
     , llvm-hs-pure
     , mtl
     , tasty
     , tasty-hunit
+    , tasty-smallcheck
   default-language: Haskell2010

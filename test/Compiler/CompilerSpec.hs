@@ -18,7 +18,7 @@ import qualified Data.String as String
 --import Data.Bits.Extras
 --import Data.Sequence as Seq
 
-import qualified Test.QuickCheck as QC
+--import qualified Test.QuickCheck as QC
 
 
 

@@ -1,0 +1,12 @@
+import LLVM.General
+import LLVM.General.Analysis
+import LLVM.General.Context
+import Control.Monad.Error
+
+main :: String -> IO ()
+main src = do
+  _ <- withContext $ \context -> do
+    runErrorT $ withModuleFromString context src $ \mod -> do
+      ast <- moduleAST mod
+      -- Your logic here.
+  return ()

@@ -18,58 +18,78 @@ module MicroRAM.MRAMInterpreter
 import MicroRAM.MicroRAM
 import Data.Bits
 import qualified Data.Sequence as Seq
+import qualified Data.Map.Strict as Map
+import Data.Map.Strict ((!))
 
 {-
-Notes:
-
+notes:
 * Current implementation uses only signed integers (Int)
-  for unsigned use Data.Word
+  but it supports unsigned integers (by converting them on the fly).
+  We might want to change that to Data.Word so we can define the range
+  and have better semantics of overflow?
+
 -}
 
-
--- # One implementation
-
+-- * MicroRAM semantics
+{- In this semantics we represent words with integeres Int and
+  registers are also indexed by intergers
+-}
 type Wrd = Int
 type Reg = Int
 
+-- ** Program State
 
--- ## The Program Counter
+-- The Program Counter is a special register, represented separatedly 
 type Pc = Wrd
 init_pc = 0
 
--- ## Registers
+-- | Registers
+-- We represent the registers a a list of words, 
 type Regs = Seq.Seq Wrd
 
 init_regs :: Int -> Regs
 init_regs k = Seq.replicate k 0 
 
--- ## The condition flag
+-- The condition and bad flags
 {- Current implementation of the flag only works for conditionals
- it does not get set on binary operations (e.g. on overflow)
- as in tiniyRAM
+ it does not get set on binary operations (e.g. on overflow) as in tiniyRAM
+
+ We add a bad flag to be raised when an operation goes wrong. If the flag is
+ set, the the rest of the state is bogus.
 -}
+
 init_flag = False
 
--- ## Memory
-type  Mem = Wrd -> Wrd
+-- | Memory
+-- Memory used to be
+-- > Mem::Wrd -> Wrd 
+-- but that is not good to building a (finite) trace
+-- also we want programs that read uninitialized memory to bad
+
+type  Mem = Map.Map Wrd Wrd
 
 init_mem :: Mem
-init_mem = \_ -> 0
+init_mem = Map.empty
 
-store :: Mem -> Wrd -> Wrd -> Mem
-store m l a = \x -> if l == x then a else m x
+store ::  Wrd -> Wrd -> Mem -> Mem
+store =  Map.insert
 
--- ## Tapes
-type Tape = [Wrd]
+-- *** Tapes
+type Tape = [Wrd]  -- ^read only tape
 
--- ## State
-{- I don't include the program in the state since it never changes -}
+-- ** Program state State
+{- I don't include the program in the state since it never changes
+
+-}
+
+-- | The program state 
 data State = State {
   pc :: Pc
   , regs :: Regs
   , mem :: Mem
   , tapes :: (Tape, Tape)
-  , flag :: Bool}
+  , flag :: Bool
+  , bad :: Bool }
   
 init_state :: Int -> Tape -> Tape -> State
 init_state k t_input t_advice  = State {
@@ -78,6 +98,7 @@ init_state k t_input t_advice  = State {
   , mem = init_mem
   , tapes = (t_input, t_advice)
   , flag = init_flag
+  , bad = init_flag
 }
 
 set_reg:: State -> Reg -> Wrd -> State
@@ -87,15 +108,17 @@ set_reg st r x = State {
   , mem = mem st
   , tapes = tapes st
   , flag = flag st
+  , bad = bad st
 }
 
 store_mem:: State -> Wrd -> Wrd -> State
 store_mem st r x = State {
   pc = pc st
   , regs = regs st 
-  , mem = store (mem st) r x
+  , mem = store r x (mem st)
   , tapes = tapes st
   , flag = flag st
+  , bad = bad st
 }
 
 set_flag:: State -> Bool -> State
@@ -105,6 +128,7 @@ set_flag st b = State {
   , mem = mem st
   , tapes = tapes st
   , flag = b
+  , bad = bad st
 }
 
 set_pc:: State -> Wrd -> State
@@ -114,48 +138,73 @@ set_pc st pc' = State {
   , mem = mem st
   , tapes = tapes st
   , flag = flag st
+  , bad = bad st
 }
 
-to_bool :: Wrd -> Maybe Bool
-to_bool 0 = Just False
-to_bool 1 = Just True
-to_bool _ = Nothing
+-- Turn on the bad flag
+-- there is no way to "unbad" a state
+set_bad:: State -> State
+set_bad st= State {
+  pc = pc st
+  , regs = regs st 
+  , mem = mem st
+  , tapes = tapes st
+  , flag = flag st
+  , bad = True
+}
+data Side = LeftSide | RightSide
 
-get_pair::Bool -> (a,a) -> a
-get_pair False = fst
-get_pair True = snd
+get_pair::Side -> (a,a) -> a
+get_pair LeftSide = fst
+get_pair RightSide = snd
 
-set_pair::Bool -> a -> (a,a) -> (a,a)
-set_pair False a (_, b)= (a, b)
-set_pair True b (a, _) = (a,b)
+set_pair::Side -> a -> (a,a) -> (a,a)
+set_pair LeftSide a (_, b)= (a, b)
+set_pair RightSide b (a, _) = (a,b)
 
-get_tape::State -> Bool -> Tape
+get_tape::State -> Side -> Tape
 get_tape st b = get_pair b (tapes st)
 
-pop_tape::Tape -> Maybe (Wrd, Tape)
-pop_tape (x:tp) = Just ( x,tp)
-pop_tape _ = Nothing
+to_side:: Wrd -> Maybe Side
+to_side 0 = Just LeftSide
+to_side 1 = Just RightSide
+to_side _ = Nothing
 
-set_tape::State -> Maybe Bool -> Reg -> Maybe (Wrd, Tape) -> State
-set_tape st (Just tn) r (Just (x, tp)) =  State {
+pop::Tape -> Maybe (Wrd, Tape)
+pop (x:tp) = Just ( x,tp)
+pop _ = Nothing
+
+set_tape::State -> Side -> Tape -> State
+set_tape st sd tp =  State {
   pc = pc st
-  , regs = Seq.update r x (regs st)
+  , regs = regs st
   , mem = mem st
-  , tapes = set_pair tn tp (tapes st)
-  , flag = flag st
+  , tapes = set_pair sd tp (tapes st)
+  , flag = False -- ^ changing the tape always sets the flag to 0 (as per Tiny RAM semantics)
+  , bad = bad st
 }
-set_tape st _ r _ = set_reg st r 0
- 
 
+-- Pop tape tries to pop a value from tape tp_n and store it in register r
+-- if the tape is empty (or tp_n > 2) set r = 0 and flag = 1
+-- if success set flag = 0
+pop_tape::State -> Wrd -> Reg -> State
+pop_tape st tp_n r =
+  case try_pop_tape st tp_n r of
+    Just st' -> set_flag st' False
+    _ -> set_flag (set_reg st r 0) True
+  where try_pop_tape st tp_n r = do
+          sd <- to_side tp_n
+          (x,tp) <- pop (get_tape st sd)
+          Just $ set_reg (set_tape st sd tp) r x
 
 next:: State -> State
 next st = set_pc st (succ $ pc st )
 
--- # Interpreter
+-- * Interpreter
 
--- ## Utility evaluators
+-- ** Utility evaluators
 
--- ### unary and binart operations
+-- *** unary and binart operations
 
 get_reg :: Regs -> Reg -> Wrd
 get_reg rs r = Seq.index rs r 
@@ -176,16 +225,16 @@ exec_bop st r1 r2 a f = next $ set_reg st r1 (bop (regs st) r2 a f)
 exec_uop :: State -> Reg -> Either Reg Wrd -> ( Wrd -> Wrd) -> State
 exec_uop st r1 a f = next $ set_reg st r1 (uop (regs st) a f)
 
--- ### Conditionals
+-- *** Conditionals Util
 
 exec_cnd :: State -> Reg -> Either Reg Wrd -> ( Wrd -> Wrd -> Bool) -> State
 exec_cnd st r1 a f = next $ set_flag st (bop (regs st) r1 a f)
 
--- ###Jump
+-- *** Jump util
 
 exec_jmp st a = set_pc st (get_either (regs st) a)
 
--- ## Instruction execution (after instr. fetching)
+-- ** Instruction execution (after instr. fetching)
 
 exec :: Instruction Reg Wrd -> State -> State
 exec (Iand r1 r2 a) st = exec_bop st r1 r2 a (.&.)
@@ -217,27 +266,24 @@ exec (Icjmp a) st = if flag st then exec_jmp st a else next st
 exec (Icnjmp a) st = if not $ flag st then exec_jmp st a else next st
 
 exec (Istore a r1) st = next $ store_mem st (get_either (regs st) a) (get_reg (regs st) r1)
-exec (Iload r1 a) st = next $ set_reg st r1 (mem st (get_either (regs st) a))
-exec (Iread r1 a) st = next $ let tn = (to_bool (get_either (regs st) a)) in
-                                set_tape st tn r1 (pop_tape =<< (get_tape st <$> tn))
+exec (Iload r1 a) st = next $ set_reg st r1 (mem st ! (get_either (regs st) a))
+exec (Iread r1 a) st = next $ pop_tape st (get_either (regs st) a) r1
 
-
--- ## Program step
+-- ** Program step
 type Prog = Program Reg Wrd
 
 step :: Prog -> State -> State
 step prog st = exec (prog !! pc st) st
 
 
--- ## Execution
+-- ** Execution
 type Trace = [State]
-run ::  Int -> Tape -> Tape -> Prog -> Trace
+run :: Int -> Tape -> Tape -> Prog -> Trace
 run k x w prog = (init_state k x w):(map (step prog) $ run k x w prog)
 
 
-
-
--- ## Some facilities to run
+-- ** Some facilities to run
+-- Simple getters to explore the trace.
 get_regs :: State -> Regs
 get_regs = regs
 
@@ -253,8 +299,9 @@ pc_trace' t= map pc t
 flag_trace'::Trace -> [Bool]
 flag_trace' t= map flag t
 
--- The standard execution
-{- Runs n steps then shows the content od first register
+-- Convenient execution
+{- As long as we haven't implemented a "return",
+   The return value will be stroed in the first register.
 -}
 k = 16
 
