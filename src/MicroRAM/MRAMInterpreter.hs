@@ -13,7 +13,8 @@ module MicroRAM.MRAMInterpreter
     exec_input,
     pc_trace,
     out_trace,
-    flag_trace) where
+    flag_trace,
+    toInt) where
 
 import MicroRAM.MicroRAM
 import Data.Bits
@@ -23,19 +24,48 @@ import Data.Map.Strict ((!))
 
 {-
 notes:
-* Current implementation uses only signed integers (Int)
-  but it supports unsigned integers (by converting them on the fly).
-  We might want to change that to Data.Word so we can define the range
-  and have better semantics of overflow?
-
+* Current implementation uses (Words) but it follows an interface
+  that can be easily converted to any other Num
+* Operations are performed over unbounded Integer and converted
+  back anf forth from Wrd
+* Follows the semantics in TinyRAM:
+  https://www.scipr-lab.org/doc/TinyRAM-spec-0.991.pdf
 -}
 
 -- * MicroRAM semantics
-{- In this semantics we represent words with integeres Int and
-  registers are also indexed by intergers
+{- In this semantics we represent words with Word and
+  registers are indexed by intergers
+
+ The interpreter is written such that it's easy
+ to switch representations (e.e. Word8 or Int)
 -}
-type Wrd = Int
+type Wrd = Word
 type Reg = Int
+wrdMax = toInteger (maxBound :: Word)
+wrdMin = toInteger (minBound :: Word)
+
+toInt :: Integral a => a -> Int
+toInt x = fromIntegral x
+
+-- Most significant bit depends on implementation
+-- If it's int then msb is the positive/negative marker
+msb :: Wrd -> Bool 
+msb x = x > (maxBound `quot` 2)
+
+-- Some binary operations that are representation dependent
+
+-- | Multiply and take the most significant bits.
+umulh :: Integer -> Integer -> Integer
+umulh r1 r2 = (r1 * r2) `quot` (wrdMax +1) -- this quotient removes the first W bits
+
+-- | Multiply SIGNED and take the most significant bits.
+-- We convert the operands through Int to interpret them as signed.
+-- Then Multiply, then take the most significant bits  
+smulh :: Integer -> Integer -> Integer
+smulh r1 r2 = (r1' * r2') `quot` (wrdMax + 1)
+  where r1' = toInteger $ toInt r1 -- By converting through Int, int's interpreted as signed.
+        r2' = toInteger $ toInt r2  -- By converting through Int, int's interpreted as signed.
+
 
 -- ** Program State
 
@@ -90,6 +120,8 @@ data State = State {
   , tapes :: (Tape, Tape)
   , flag :: Bool
   , bad :: Bool }
+  deriving (Eq, Read, Show)
+  
   
 init_state :: Int -> Tape -> Tape -> State
 init_state k t_input t_advice  = State {
@@ -101,8 +133,8 @@ init_state k t_input t_advice  = State {
   , bad = init_flag
 }
 
-set_reg:: State -> Reg -> Wrd -> State
-set_reg st r x = State {
+set_reg:: Reg -> Wrd -> State -> State
+set_reg r x st = State {
   pc = pc st
   , regs = Seq.update r x (regs st)
   , mem = mem st
@@ -111,8 +143,8 @@ set_reg st r x = State {
   , bad = bad st
 }
 
-store_mem:: State -> Wrd -> Wrd -> State
-store_mem st r x = State {
+store_mem::  Wrd -> Wrd -> State -> State
+store_mem r x st = State {
   pc = pc st
   , regs = regs st 
   , mem = store r x (mem st)
@@ -121,8 +153,8 @@ store_mem st r x = State {
   , bad = bad st
 }
 
-set_flag:: State -> Bool -> State
-set_flag st b = State {
+set_flag:: Bool -> State -> State
+set_flag b st = State {
   pc = pc st
   , regs = regs st 
   , mem = mem st
@@ -131,8 +163,8 @@ set_flag st b = State {
   , bad = bad st
 }
 
-set_pc:: State -> Wrd -> State
-set_pc st pc' = State {
+set_pc:: Wrd -> State -> State
+set_pc pc' st = State {
   pc = pc'
   , regs = regs st 
   , mem = mem st
@@ -171,11 +203,11 @@ to_side 1 = Just RightSide
 to_side _ = Nothing
 
 pop::Tape -> Maybe (Wrd, Tape)
-pop (x:tp) = Just ( x,tp)
+pop (x:tp) = Just (x,tp)
 pop _ = Nothing
 
-set_tape::State -> Side -> Tape -> State
-set_tape st sd tp =  State {
+set_tape::Side -> Tape -> State -> State
+set_tape sd tp st  =  State {
   pc = pc st
   , regs = regs st
   , mem = mem st
@@ -187,93 +219,197 @@ set_tape st sd tp =  State {
 -- Pop tape tries to pop a value from tape tp_n and store it in register r
 -- if the tape is empty (or tp_n > 2) set r = 0 and flag = 1
 -- if success set flag = 0
-pop_tape::State -> Wrd -> Reg -> State
-pop_tape st tp_n r =
+pop_tape::Wrd -> Reg -> State -> State
+pop_tape tp_n r st =
   case try_pop_tape st tp_n r of
-    Just st' -> set_flag st' False
-    _ -> set_flag (set_reg st r 0) True
+    Just st' -> set_flag False st'
+    _ -> set_flag True (set_reg r 0 st)
   where try_pop_tape st tp_n r = do
           sd <- to_side tp_n
           (x,tp) <- pop (get_tape st sd)
-          Just $ set_reg (set_tape st sd tp) r x
+          Just $ set_reg r x $ set_tape sd tp st
 
 next:: State -> State
-next st = set_pc st (succ $ pc st )
+next st = set_pc (succ $ pc st) st
 
 -- * Interpreter
 
 -- ** Utility evaluators
 
--- *** unary and binart operations
-
+-- | Register getters (from a set register set)
 get_reg :: Regs -> Reg -> Wrd
 get_reg rs r = Seq.index rs r 
 
-get_either :: Regs -> Either Reg Wrd -> Wrd
-get_either rs (Left r) = get_reg rs r
-get_either rs (Right w) = w
+eval_reg st r = get_reg (regs st) r
 
-bop :: Regs -> Reg -> Either Reg Wrd -> (Wrd -> Wrd -> x) -> x
-bop rs r1 a f = f (get_reg rs r1) (get_either rs a)
+-- | Gets operand wether it's a register or a constant or a PC
+eval_operand :: State -> Operand Reg Wrd -> Wrd
+eval_operand st (Reg r) = get_reg (regs st) r
+eval_operand st (Const w) = w
 
-uop :: Regs -> Either Reg Wrd -> (Wrd -> x) -> x
-uop rs a f = f (get_either rs a)
+-- *** unary and binart operations
+{- The way we computeto do binary/unary operations we do the following steps:
+   1 - Compute the operands (results are type Wrd)
+   2 - Transforms the operands to Integer
+   3 - Compute the operation over the integers
+   4 - Transform the result to Wrd and store it in the return register
+   5 - Set the flag, if the given condition is satisfied over the result
 
-exec_bop :: State -> Reg -> Reg -> Either Reg Wrd -> (Wrd -> Wrd -> Wrd) -> State
-exec_bop st r1 r2 a f = next $ set_reg st r1 (bop (regs st) r2 a f)
+We use Integers to be homogeneus over all possible types Wrd and because it makes checking under/overflow easier
+-}
 
-exec_uop :: State -> Reg -> Either Reg Wrd -> ( Wrd -> Wrd) -> State
-exec_uop st r1 a f = next $ set_reg st r1 (uop (regs st) a f)
+-- | Binary operations generic.
+bop :: State
+       -> Reg
+       -> Operand Reg Wrd
+       -> (Integer -> Integer -> x) -- ^ Binary operation
+       -- -> (Integer -> Bool) -- ^ Set the flag? Is applied to the result of the operation 
+       -> x
+bop rs r1 a f = f (toInteger $ get_reg (regs rs) r1) (toInteger $ eval_operand rs a)
 
+-- | Unart operations generic. 
+uop :: State
+       -> Operand Reg Wrd
+       -> (Integer -> x)
+       -- -> (Integer -> Bool) -- ^ Set the flag? Is applied to the result of the operation 
+       -> x
+uop rs a f = f (toInteger $ eval_operand rs a)
+
+
+-- | Catches division by 0
+-- By TinyRAM semantics, this sets the flag to 0 and returns 0
+-- I would like to flag this as an error.
+exception :: Bool
+          -> Reg
+          -> (State -> State) -- ^ continuation
+          -> State
+          -> State
+exception False _ f st = f st
+exception True r _ st = next $ set_flag True $ set_reg r 0 st
+catchZero :: Wrd
+           -> Reg
+          -> (State -> State) -- ^ continuation
+          -> State
+          -> State
+catchZero w = exception (w == 0)
+
+exec_bop :: State
+         -> Reg
+         -> Reg
+         -> Operand Reg Wrd
+         -> (Integer -> Integer -> Integer) -- ^ Binary operation
+         -> (Integer -> Bool) -- ^ Checks if flag should be set
+         -> State 
+exec_bop st r1 r2 a f check = next $ set_flag (check result) $ set_reg r1 (fromInteger result) st
+  where result = bop st r2 a f
+
+-- | Evaluate binop, but first check a<>0 
+execBopCatchZero :: State
+         -> Reg
+         -> Reg
+         -> Operand Reg Wrd
+         -> (Integer -> Integer -> Integer) -- ^ Binary operation
+         -> State 
+execBopCatchZero st r1 r2 a f =
+  catchZero (eval_operand st a) r1 (\st -> exec_bop st r1 r2 a quot (\_->True)) st 
+
+
+exec_uop :: State -> Reg -> Operand Reg Wrd
+         -> (Integer -> Integer) -- ^ Unary operatio
+         -> (Integer -> Bool) -- ^ Checks if flag should be set
+         -> State
+exec_uop st r1 a f check = next $ set_flag (check result) $ set_reg r1 (fromInteger result) st
+  where result = uop st a f
+
+
+-- Common checks for binary operations (to set the flag)
+isZero :: Integer -> Bool
+isZero 0 = True
+isZero _ = False
+notZero x = not (isZero x)
+
+
+overflow :: Integer -> Bool
+overflow i = i > wrdMax
+
+borrow :: Integer -> Bool
+borrow i = i < 0
+
+overUnderflow :: Integer -> Bool
+overUnderflow i = i < wrdMin || i > wrdMax
+
+
+
+trivialCheck :: Integer -> Bool
+trivialCheck _ = True
+
+-- compute most/less significant digit
+lsb :: Wrd -> Bool
+lsb x = 0 == x `mod` 2
+                 
 -- *** Conditionals Util
 
-exec_cnd :: State -> Reg -> Either Reg Wrd -> ( Wrd -> Wrd -> Bool) -> State
-exec_cnd st r1 a f = next $ set_flag st (bop (regs st) r1 a f)
+exec_cnd :: State -> Reg -> Operand Reg Wrd -> (Integer -> Integer -> Bool) -> State
+exec_cnd st r1 a f = next $ set_flag result st
+                        where result = bop st r1 a f
 
 -- *** Jump util
 
-exec_jmp st a = set_pc st (get_either (regs st) a)
+exec_jmp st a = set_pc (eval_operand st a) st
 
 -- ** Instruction execution (after instr. fetching)
 
 exec :: Instruction Reg Wrd -> State -> State
-exec (Iand r1 r2 a) st = exec_bop st r1 r2 a (.&.)
-exec (Ior r1 r2 a) st = exec_bop st r1 r2 a (.|.)
-exec (Ixor r1 r2 a) st = exec_bop st r1 r2 a xor
-exec (Inot r1 a) st = exec_uop st r1 a complement
+exec (Iand r1 r2 a) st = exec_bop st r1 r2 a (.&.) isZero
+exec (Ior r1 r2 a) st = exec_bop st r1 r2 a (.|.) isZero
+exec (Ixor r1 r2 a) st = exec_bop st r1 r2 a xor isZero
+exec (Inot r1 a) st = exec_uop st r1 a complement isZero
 
-exec (Iadd r1 r2 a) st = exec_bop st r1 r2 a (+)
-exec (Isub r1 r2 a) st = exec_bop st r1 r2 a (-)
-exec (Imull r1 r2 a) st = exec_bop st r1 r2 a (*)
--- exec (Iumulh r1 r2 a) st = exec_bop st r1 r2 a (*)
--- exec (Iumulh r1 r2 a) st = exec_bop st r1 r2 a (*)
-exec (Iudiv r1 r2 a) st = exec_bop st r1 r2 a quot
-exec (Iumod r1 r2 a) st = exec_bop st r1 r2 a mod
+exec (Iadd r1 r2 a) st = exec_bop st r1 r2 a (+) overflow
+exec (Isub r1 r2 a) st = exec_bop st r1 r2 a (-) borrow
+exec (Imull r1 r2 a) st = exec_bop st r1 r2 a (*) overflow
 
-exec (Ishl r1 r2 a) st = exec_bop st r1 r2 a shiftL
-exec (Ishr r1 r2 a) st = exec_bop st r1 r2 a shiftR
+exec (Iumulh r1 r2 a) st = exec_bop st r1 r2 a umulh notZero -- flagged iff the return is not zero (indicates overflow)
+exec (Ismulh r1 r2 a) st = exec_bop st r1 r2 a smulh notZero  -- flagged iff the return is not zero (indicates overflow)
+exec (Iudiv r1 r2 a) st = execBopCatchZero st r1 r2 a quot 
+exec (Iumod r1 r2 a) st = execBopCatchZero st r1 r2 a mod
 
+-- Shifts are a bit tricky since the flag depends on the operand not the result.
+exec (Ishl r1 r2 a) st = set_flag (msb $ eval_reg st r1) $
+  exec_bop st r1 r2 a (\a b -> shiftL a (fromInteger b)) trivialCheck
+exec (Ishr r1 r2 a) st = set_flag (lsb $ eval_reg st r1) $
+  exec_bop st r1 r2 a (\a b -> shiftR a (fromInteger b)) trivialCheck
 
+-- Compare operations
 exec (Icmpe r1 a) st = exec_cnd st r1 a (==)
 exec (Icmpa r1 a) st = exec_cnd st r1 a (>)
 exec (Icmpae r1 a) st = exec_cnd st r1 a (>=)
 exec (Icmpg r1 a) st = exec_cnd st r1 a (>)
 exec (Icmpge r1 a) st = exec_cnd st r1 a (>=)
- 
 
+-- Move operations
+exec (Imov r a) st = next $ set_reg r (eval_operand st a) st
+exec (Icmov r a) st = if flag st
+  then exec (Imov r a) st
+  else next st
+ 
+-- Jump Operations
 exec (Ijmp a) st = exec_jmp st a
 exec (Icjmp a) st = if flag st then exec_jmp st a else next st
 exec (Icnjmp a) st = if not $ flag st then exec_jmp st a else next st
 
-exec (Istore a r1) st = next $ store_mem st (get_either (regs st) a) (get_reg (regs st) r1)
-exec (Iload r1 a) st = next $ set_reg st r1 (mem st ! (get_either (regs st) a))
-exec (Iread r1 a) st = next $ pop_tape st (get_either (regs st) a) r1
+--Memory operations
+exec (Istore a r1) st = next $ store_mem (eval_operand st a) (get_reg (regs st) r1) st
+exec (Iload r1 a) st = next $ set_reg r1 (mem st ! (eval_operand st a)) st
+exec (Iread r1 a) st = next $ pop_tape (eval_operand st a) r1 st
+
+exec (Ianswer a) st = set_reg 0 (eval_operand st a) st -- sets register 0 to the answer and loops (pc not incremented)
 
 -- ** Program step
 type Prog = Program Reg Wrd
 
 step :: Prog -> State -> State
-step prog st = exec (prog !! pc st) st
+step prog st = exec (prog !! (toInt $ pc st)) st
 
 
 -- ** Execution
@@ -293,7 +429,7 @@ see_regs t n = regs (t !! n)
 reg_trace::Trace -> [Regs]
 reg_trace t = map regs t
 
-pc_trace'::Trace -> [Int]
+pc_trace'::Trace -> [Wrd]
 pc_trace' t= map pc t
 
 flag_trace'::Trace -> [Bool]

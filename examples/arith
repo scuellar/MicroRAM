@@ -1,0 +1,1 @@
+[Iadd 0 0 (Const 1),Iadd 0 0 (Const 2),Iadd 1 1 (Const 3),Iadd 1 1 (Const 4),Imull 0 0 (Reg 1)]

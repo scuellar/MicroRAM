@@ -1,6 +1,27 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RankNTypes #-}
 
+{-|
+Module      : Compiler
+Description : LLVM' -> MicroASM
+Maintainer  : santiago@galois.com
+Stability   : experimental
+
+This module compiles LLVM' to MicroASM.
+
+LLVM' is different from LLVM in that it has been register allocated. 
+So every name represents a register from a finite set. In particular,
+LLVM' is not in SSA form.
+
+
+MicroASM is different to MicrRAM in that it allows the operands
+`Label` and `HereLabel`. The assembler will replace those labels
+with the actual instruction numbers to obtain MicroRAM. In particular
+a MicroASM program can be "partial" and needs to be linked to another part
+that contains some of the labels (this allows some simple separta compilation.
+
+-}
+
 module Compiler.Compiler
     ( codegenGlob,
       codegenBlock,

@@ -6,5 +6,12 @@
  * A interpreter of TinyRAM in Haskell 
  * A compiler from LLVM to TinyRAM
  * A compiler from TinyRAM to Non deterministic circuit
- 
- The entire project is meant as an exercise for me to learn Haskell, TinyRAM, LLVM and SNARK circuits.
+
+
+There is a collection of examples in the `examples` folder. You can run them like so
+
+```
+% stack build
+% stack exec MicroRAM-exe examples/fibonacci 4
+\\ Prints 40 steps of running the program
+```
