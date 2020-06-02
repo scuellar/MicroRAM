@@ -39,6 +39,7 @@ notes:
  The interpreter is written such that it's easy
  to switch representations (e.e. Word8 or Int)
 -}
+
 type Wrd = Word
 type Reg = Int
 wrdMax = toInteger (maxBound :: Word)
@@ -96,7 +97,7 @@ init_flag = False
 -- but that is not good to building a (finite) trace
 -- also we want programs that read uninitialized memory to bad
 
-type  Mem = Map.Map Wrd Wrd
+type Mem = Map.Map Wrd Wrd
 
 init_mem :: Mem
 init_mem = Map.empty
@@ -244,7 +245,7 @@ eval_reg st r = get_reg (regs st) r
 
 -- | Gets operand wether it's a register or a constant or a PC
 eval_operand :: State -> Operand Reg Wrd -> Wrd
-eval_operand st (Reg r) = get_reg (regs st) r
+eval_operand st (Reg r) = eval_reg st r
 eval_operand st (Const w) = w
 
 -- *** unary and binart operations
@@ -285,7 +286,7 @@ exception :: Bool
           -> State
           -> State
 exception False _ f st = f st
-exception True r _ st = next $ set_flag True $ set_reg r 0 st
+exception True r _ st = set_flag True $ set_reg r 0 st
 catchZero :: Wrd
            -> Reg
           -> (State -> State) -- ^ continuation
@@ -339,7 +340,6 @@ overUnderflow :: Integer -> Bool
 overUnderflow i = i < wrdMin || i > wrdMax
 
 
-
 trivialCheck :: Integer -> Bool
 trivialCheck _ = True
 
@@ -371,8 +371,8 @@ exec (Imull r1 r2 a) st = exec_bop st r1 r2 a (*) overflow
 
 exec (Iumulh r1 r2 a) st = exec_bop st r1 r2 a umulh notZero -- flagged iff the return is not zero (indicates overflow)
 exec (Ismulh r1 r2 a) st = exec_bop st r1 r2 a smulh notZero  -- flagged iff the return is not zero (indicates overflow)
-exec (Iudiv r1 r2 a) st = execBopCatchZero st r1 r2 a quot 
-exec (Iumod r1 r2 a) st = execBopCatchZero st r1 r2 a mod
+exec (Iudiv r1 r2 a) st = execBopCatchZero st r1 r2 a quot
+exec (Iumod r1 r2 a) st = execBopCatchZero st r1 r2 a rem
 
 -- Shifts are a bit tricky since the flag depends on the operand not the result.
 exec (Ishl r1 r2 a) st = set_flag (msb $ eval_reg st r1) $
@@ -415,8 +415,7 @@ step prog st = exec (prog !! (toInt $ pc st)) st
 -- ** Execution
 type Trace = [State]
 run :: Int -> Tape -> Tape -> Prog -> Trace
-run k x w prog = (init_state k x w):(map (step prog) $ run k x w prog)
-
+run k x w prog = iterate (step prog) $ init_state k x w
 
 -- ** Some facilities to run
 -- Simple getters to explore the trace.

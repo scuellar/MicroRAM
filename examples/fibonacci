@@ -1,1 +1,1 @@
-[Iadd 0 1 (Const 1),Iadd 2 0 (Const 0),Iadd 0 0 (Reg 1),Iadd 1 2 (Const 0),Ijmp (Const 1)]
+Wrong number of arguments

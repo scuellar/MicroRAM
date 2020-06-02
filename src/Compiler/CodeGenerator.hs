@@ -22,16 +22,18 @@ that contains some of the labels (this allows some simple separta compilation.
 
 -}
 
-module Compiler.Compiler
-    ( codegenGlob,
+module Compiler.CodeGenerator
+    ( codeGen,
+      codegenGlob,
       codegenBlock,
       codegenBlocks,
       Genv(..),
       CgMonad,
-      CompiledBlock
+      CgError(..),
+      CompiledBlock,
     ) where
 
-import qualified LLVM.AST as LLVM
+import qualified LLVM.AST as LLVM 
 import qualified LLVM.AST.Constant as LLVM.Constant
 import Control.Monad.State.Lazy
 import Control.Monad.Except
@@ -41,7 +43,7 @@ import qualified Data.ByteString.Short as Short
 import qualified Data.Sequence as Seq (lookup, fromList)
 import qualified Data.Word as Word
 
-import MicroRAM.MicroRAM (Operand(..)) 
+import MicroRAM.MicroRAM (Operand'(..), MAOperand) 
 import qualified MicroRAM.MicroRAM as MRAM
 import qualified LLVM.AST.IntegerPredicate as IntPred
 import qualified LLVM.AST.ParameterAttribute as ParamAtt
@@ -117,9 +119,14 @@ string2int = flip List.elemIndex regNames
 
 short2string = C8.unpack . Short.fromShort
 
+name2string :: LLVM.Name -> Maybe String
+name2string (LLVM.Name name) = Just $ short2string name
+name2string _ = Nothing
+
 name2register :: LLVM.Name -> Maybe Reg
-name2register (LLVM.Name name) = string2int $ short2string name
-name2register _ = Nothing
+name2register name = do
+  str_name <- name2string name
+  string2int str_name
 
 register2string:: Reg -> Maybe String
 register2string r = Seq.lookup r (Seq.fromList regNames) 
@@ -132,7 +139,7 @@ type ($) a b = a b
 type Wrd = Word
 type Reg = Int
 type Ptr = Wrd
-type Prog = MRAM.Program Reg Wrd
+type Prog = MRAM.MAProgram Reg Wrd
 
  -- ** Error handling
 data CgError = NotImpl String      -- Feature not implemented
@@ -159,7 +166,7 @@ pop r = [MRAM.Iload r (Reg sp), MRAM.Isub  sp sp (Const 1)]
 -- ** Function calls
 -- | Generate code for function call
 type Parameter = (LLVM.Operand, [ParamAtt.ParameterAttribute])
-funCodeGen :: Genv -> Maybe Reg -> LLVM.CallableOperand -> [Parameter] -> CgMonad $ Prog
+funCodeGen :: Genv -> Maybe Reg -> LLVM.CallableOperand -> [Parameter] -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 funCodeGen _ _ (Left _) _ = implError $ "Inlined assembly not supported"
 funCodeGen genv ret (Right (LLVM.LocalReference ty nm)) param =
   funCodeGen' ret ty nm param 
@@ -168,11 +175,11 @@ funCodeGen _ _ (Right _) _ = implError $ "Functions can only be called by local 
 -- | Push parameters in the stack
 pushParams ptys params = []
 
-putResult :: Maybe Reg -> Prog
+putResult :: Maybe Reg -> [MRAM.MAInstruction Reg Wrd]
 puResult (Just r) = [MRAM.Imov r (Reg ax)]
 putResult _ = []
 
-funCodeGen' :: Maybe Reg -> LLVM.Type -> LLVM.Name -> [Parameter] -> CgMonad $ Prog
+funCodeGen' :: Maybe Reg -> LLVM.Type -> LLVM.Name -> [Parameter] -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 funCodeGen' _ (LLVM.FunctionType  _ _ True) _ _ = implError $ "Variable parameters (isVarArg in function call)." 
 funCodeGen' ret (LLVM.FunctionType resTy argTys False) nm params = 
   case nm of
@@ -219,13 +226,13 @@ getReg n = case name2register n of
               Just x -> Right x
               Nothing -> Left $ OtherError $ "Couldn't find register. "
 
-getConstReg :: LLVM.Operand -> CgMonad $ Operand Reg Wrd
+getConstReg :: LLVM.Operand -> CgMonad $ MAOperand Reg Wrd
 getConstReg (LLVM.ConstantOperand c) = Const <$> getConstant c
 getConstReg (LLVM.LocalReference _ name) = Reg <$> getReg name
 getConstReg _ = implError "operand, probably metadata"
 
-type BinopInstruction = Reg -> Reg -> Operand Reg Wrd -> MRAM.Instruction Reg Wrd
-codegenBinop :: Genv -> Maybe Reg -> LLVM.Operand -> LLVM.Operand -> BinopInstruction -> CgMonad $ Prog
+type BinopInstruction = Reg -> Reg -> MRAM.MAOperand Reg Wrd -> MRAM.MAInstruction Reg Wrd
+codegenBinop :: Genv -> Maybe Reg -> LLVM.Operand -> LLVM.Operand -> BinopInstruction -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 codegenBinop _ Nothing _ _ _ = Right $ [] --  without return is a noop
 codegenBinop _ _ (LLVM.ConstantOperand _) (LLVM.ConstantOperand _) _ =
   Left $ CompilerAssumption "Two constants in a binop. Did you forget to run constant propagation?"
@@ -233,9 +240,10 @@ codegenBinop _ (Just ret) (LLVM.LocalReference _ name1) op2 bop =
   let r1 = getReg name1 in
     let a = getConstReg op2 in
      (\x -> [x]) <$> ((bop ret) <$> r1 <*> a)
-codegenBinop _ _ _ _ _ = Left $ NotImpl "Binary operation with operands other than (register,register) or (register,constant)"
+codegenBinop _ _ _ _ _ = Left $
+  NotImpl "Binary operation with operands other than (register,register) or (register,constant)"
 
-codegenInstruction :: Genv -> Maybe Reg -> LLVM.Instruction -> CgMonad $ Prog
+codegenInstruction :: Genv -> Maybe Reg -> LLVM.Instruction -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 
 fError = implError "Floatin point arithmetic"
 uError = implError "unsigned operations"
@@ -379,14 +387,14 @@ codegenInstruction genv _ instr =  implError $ "Instruction: " ++ (show instr)
 
 -- ** Named instructions and instructions lists
 
-codegenNInstruction :: Genv -> LLVM.Named LLVM.Instruction -> CgMonad $ Prog
+codegenNInstruction :: Genv -> LLVM.Named LLVM.Instruction -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 codegenNInstruction genv (LLVM.Do instr) = codegenInstruction genv Nothing instr
 codegenNInstruction genv (name LLVM.:= instr) = let ret = getReg name in
                                                   (\ret -> codegenInstruction genv (Just ret) instr) =<< ret
 codegenInstrs
   :: Genv
      -> [LLVM.Named LLVM.Instruction]
-     -> CgMonad $ [MRAM.Instruction Reg Wrd]
+     -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 codegenInstrs genv [] = Right $ []
 codegenInstrs genv instrs = (foldr1 (++)) <$>  (mapM (codegenNInstruction genv) instrs)
 
@@ -405,11 +413,10 @@ Compiling basic blocks is done in three passes (can be optimized into two).
 3. Compiles the terminators using the mapping from labels to line no. to set the right target for control flow.
 
 -}
-
-data CompiledBlock = CompiledBlock { cb_name::LLVM.Name
-                                   , cb_terminator::LLVM.Named LLVM.Terminator
-                                   , cb_code::Prog
-                                   } deriving (Eq, Read, Show)
+type CompiledBlock = MRAM.NamedBlock Reg Wrd
+--data CompiledBlock = CompiledBlock { cb_name::Maybe String
+--                                   , cb_code::[MRAM.MAInstruction Reg Wrd]
+--                                   } deriving (Eq, Read, Show)
 type LabelMap = LLVM.Name -> Maybe Int
 initLblMap :: LabelMap
 initLblMap = \_ -> Nothing
@@ -419,13 +426,14 @@ initLblMap = \_ -> Nothing
   | name == name' = Just n
   | otherwise = lmap name'
 
-label2reg:: LLVM.Name -> CgMonad $ Operand Reg Wrd
-label2reg (LLVM.Name nm) = Right $ Label $ short2string nm
-label2reg (LLVM.UnName _) = otherError $ "Unnammed labels not supported yet"
+label2operand:: LLVM.Name -> CgMonad $ MAOperand Reg Wrd
+label2operand (LLVM.Name nm) = Right $ Label $ short2string nm
+label2operand (LLVM.UnName _) = otherError $ "Unnammed labels not supported yet"
 
 -- Statically we can know the numer of instructions taken to execute a terminator
 -- Be carefull to update this when more terminators are implemented
 -- Again this can be done much better if optimized into one pass
+{-
 terminatorSize :: Num p => LLVM.Terminator -> p
 terminatorSize (LLVM.Br name _) = 1
 terminatorSize (LLVM.CondBr _ _ _ _) = 3
@@ -437,92 +445,84 @@ nTerminatorSize (LLVM.Do term) = terminatorSize term
 
 getNameMap_rec :: Int -> LabelMap -> [CompiledBlock] -> LabelMap
 getNameMap_rec _ lmap [] = lmap
-getNameMap_rec n lmap ((CompiledBlock name term code ):ls) =
+getNameMap_rec n lmap ((CompiledBlock name code ):ls) =
   getNameMap_rec (n + (length code) + (nTerminatorSize term) ) (lmap <-- name $ n) ls
 
 getNameMap :: [CompiledBlock] -> LabelMap
 getNameMap = getNameMap_rec 0 initLblMap
-
+-}
 -- We ignore the name of terminators
-codegenTerminator :: LabelMap -> LLVM.Named LLVM.Terminator -> CgMonad $ Prog
-codegenTerminator lmap (_ LLVM.:= term) = codegenTerminator' lmap term
-codegenTerminator lmap (LLVM.Do term) = codegenTerminator' lmap term
+codegenTerminator :: LLVM.Named LLVM.Terminator -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
+codegenTerminator (name LLVM.:= term) =  codegenTerminator' term
+codegenTerminator (LLVM.Do term) = codegenTerminator' term
 
-codegenTerminator' :: LabelMap -> LLVM.Terminator -> CgMonad $ Prog
+codegenTerminator' :: LLVM.Terminator -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
 -- Branching
-codegenTerminator' lmap (LLVM.Br name _) = (MRAM.Ijmp <$> (label2reg name)) <:> (Right [])
-codegenTerminator' lmap (LLVM.CondBr (LLVM.LocalReference _ name ) name1 name2 _) = do
+codegenTerminator' (LLVM.Br name _) = (MRAM.Ijmp <$> (label2operand name)) <:> (Right [])
+codegenTerminator' (LLVM.CondBr (LLVM.LocalReference _ name ) name1 name2 _) = do
   r1 <- getReg name
-  loc1 <- label2reg name1
-  loc2 <- label2reg name2
+  loc1 <- label2operand name1
+  loc2 <- label2operand name2
   Right $ [MRAM.Icmpe r1 (Const 1),
     MRAM.Icjmp loc1,
      MRAM.Ijmp loc2]
-  
-  let r1 = getReg name1 in
-    let loc1 = label2reg name1 in
-      let loc2 = label2reg name2 in
-    ((flip MRAM.Icmpe (Reg 1)) <$> r1) <:>
-    ((MRAM.Icjmp <$> loc1) <:> 
-    ((MRAM.Ijmp <$> loc2) <:>
-    (Right [])))
-codegenTerminator' lmap (LLVM.CondBr _ name1 name2 _) =
-  assumptError "conditional branching must depend on a register. If you passed a constant prhaps you forgot to run constant propagation. Metadata is not supported."
-codegenTerminator' lmap (LLVM.Ret (Just ret) md) = do
+codegenTerminator' (LLVM.CondBr _ name1 name2 _) =
+  assumptError "conditional branching must depend on a register. If you passed a constant prhaps you forgot to run constant propagation. Can't branch on Metadata."
+codegenTerminator' (LLVM.Ret (Just ret) md) = do
   ret_val <- getConstReg ret
-  cont <- codegenTerminator' lmap (LLVM.Ret Nothing md)
-  Right $ MRAM.Imov ax ret_val : cont
-  
-codegenTerminator' lmap (LLVM.Ret Nothing _) = Right $
-  [MRAM.Iadd ax bp (Const 1),       -- ax = location of return addres
+  cont <- codegenTerminator' (LLVM.Ret Nothing md)
+  Right $ MRAM.Imov ax ret_val : cont 
+codegenTerminator' (LLVM.Ret Nothing _) = Right $
+  [MRAM.Iadd ax bp (Const 1),        -- ax = location of return addres
    MRAM.Iload ax (Reg ax),           -- ax = return address
-   MRAM.Ijmp (Reg ax)]
-  
-codegenTerminator' _ term = implError $ "Terminator not yet supported" ++ (show term)
-      
-  
-codegenBlock :: Genv -> LLVM.BasicBlock -> CgMonad $ CompiledBlock
-codegenBlock genv (LLVM.BasicBlock name instrs term) =
-  (CompiledBlock name term) <$> (codegenInstrs genv instrs)
+   MRAM.Ijmp (Reg ax)]               -- Goto return location.
+codegenTerminator' term = implError $ "Terminator not yet supported" ++ (show term)
 
+codegenBlock :: Genv -> LLVM.BasicBlock -> CgMonad $ CompiledBlock
+codegenBlock genv (LLVM.BasicBlock name instrs term) = do
+  body <- codegenInstrs genv instrs
+  end <- codegenTerminator term
+  Right $ MRAM.NBlock (name2string name) $ body ++ end
+
+{-
 codegenCompiledBlock
   :: Genv
-     -> LabelMap
      -> CompiledBlock
-     -> CgMonad $ Prog
-codegenCompiledBlock genv lmap (CompiledBlock name term prog) =
-  (prog ++) <$> (codegenTerminator lmap term)
+     -> CgMonad $ [MRAM.MAInstruction Reg Wrd]
+codegenCompiledBlock genv (CompiledBlock name prog) =
+  (prog ++) <$> (codegenTerminator term)  -- Move this to the assembler!
+-}
 
-
-codegenBlocks :: Genv -> [LLVM.BasicBlock] -> CgMonad $ Prog
-codegenBlocks genv blocks =
-  let compiledBlocks = mapM (codegenBlock genv) blocks in
-    let lmap = getNameMap <$> compiledBlocks in
-      (foldr1 (++)) <$> (mapM <$> (((codegenCompiledBlock genv) <$> lmap)) <*> compiledBlocks >>= id)
+codegenBlocks :: Genv -> [LLVM.BasicBlock] -> CgMonad $ [CompiledBlock]
+codegenBlocks genv blocks = mapM (codegenBlock genv) blocks
 
 -- ## Globals
 
-codegenGlob :: Genv -> LLVM.Global -> CgMonad $ Prog
-codegenGlob genv (LLVM.GlobalVariable name _ _ _ _ _ _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Varianbles"
+codegenGlob :: Genv -> LLVM.Global -> CgMonad $ [CompiledBlock]
+codegenGlob genv (LLVM.GlobalVariable name _ _ _ _ _ _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Variables"
 codegenGlob genv (LLVM.GlobalAlias name _ _ _ _ _ _ _ _) = Left $ NotImpl "Global Alias"
-codegenGlob genv (LLVM.Function _ _ _ _ _ retT name params _ _ _ _ _ _ bb _ _) =
-  Right $ []
+codegenGlob genv (LLVM.Function _ _ _ _ _ retT name params _ _ _ _ _ _ code _ _) = do
+  body <- codegenBlocks genv code
+  let header = MRAM.NBlock (name2string name) [] in -- Empty block signals function entry.  
+    Right $ header : body
 
 
 
-codegenModule :: LLVM.Module -> CgMonad $ Prog
-codegenModule (LLVM.Module _ _ _ _ defs) = codegenDefs defs
+codegenModule :: Genv ->  LLVM.Module -> CgMonad $ MRAM.MAProgram Reg Wrd
+codegenModule ge (LLVM.Module _ _ _ _ defs) = codegenDefs ge defs
 
 data Genv = Genv {
   vars :: [Char] -> Ptr
   , fun :: [Char] -> Maybe Int -- Instruction location
 }
+emptyGenv = Genv (\x -> 0) (\x -> Nothing)
 
-codegenDefs :: [LLVM.Definition] -> CgMonad $ Prog
-codegenDefs [] = Right [] 
-codegenDefs (d:ds) = Right []
+codegenDefs :: Genv -> [LLVM.Definition] -> CgMonad $ MRAM.MAProgram Reg Wrd
+codegenDefs ge ds = concat <$> mapM (codegenDef ge) ds
 
-codegenDef :: Genv -> LLVM.Definition -> CgMonad $ Prog
+codegenDef :: Genv -> LLVM.Definition -> CgMonad $ MRAM.MAProgram Reg Wrd
 codegenDef genv (LLVM.GlobalDefinition glob) = Right []
 codegenDef genv otherDef = Left $ NotImpl (show otherDef)
 
+
+codeGen = codegenModule emptyGenv
